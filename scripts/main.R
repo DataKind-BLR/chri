@@ -98,14 +98,151 @@ read.Nalsa2010.xlsx <- function(fname) {
 }
 
 
+read.Nalsa2011.Jail.xlsx <- function(fname) {
+    nalsaColNames <- c('State', 'District', 
+                       'JailType', 'JailName',
+                       'WithClinic', 'ClinicDOB', 
+                       'JailVisitingLawyers', 'PrisonerVolunteers', 'CommunityVolunteers')
+
+    d <- data.table(read_excel(fname, 1, skip = 2, col_names = nalsaColNames))
+
+    # Special treatment for date of form %d/%m/%Y (coerced above as integer)
+    clinicDOB <- read_excel(fname, 1, skip = 2, col_names = nalsaColNames,
+                            col_types = c(rep(c("text"),5), "date", rep(c("text"),3)))$ClinicDOB
+    for (i in which(!is.na(clinicDOB))) {
+        d$ClinicDOB[i] <- strftime(as.Date(clinicDOB[i], format="%Y-%m-%d"), format="%d-%m-%Y")
+    }
+    
+    # Data type conversions
+    cleanForDate <- function(x) {
+        key <- trimws(tolower(x))
+        x[key %in% c('in the year 2013')] <- "01-01-2013"
+        x[key %in% c('june , 2012')] <- "01-06-2012"
+        x[key %in% c('7--7-2015')] <- "07-07-2015"
+        x[key %in% c('104-2015')] <- "01-01-2015"
+        x[key %in% c('29-6-20151')] <- "29-06-2015"
+        x[key %in% c('during july 2013')] <- "01-07-2013"
+        x[key %in% c('24-10-2013,30-6-2016')] <- "24-10-2013"
+        x[key %in% c('na','n.a','not applicable',
+                     'not responded','no response',
+                     'not provided','data is not available')] <- NA
+        x <- gsub("/", "-", x, perl=TRUE)
+        return(as.Date(x, "%d-%m-%Y"))
+    }
+    dateCols <- c('ClinicDOB')
+    d[, (dateCols) := lapply(.SD, cleanForDate), .SDcols=dateCols]
+
+    cleanForFactor <- function(x) {
+        # TODO Consider specific processing for each column
+        key <- trimws(tolower(x))
+        x[key %in% c('not clear')] <- "Judicial Lockup" # based on JailName
+        x[key %in% c('4 jails','no','na','nil')] <- NA
+        x <- gsub(".*JUDICIAL LOCK UP RAMPUR.*", "Rampur and Kalpa", x, perl=TRUE)
+        x <- gsub(".*CORRECTIONAL HOME.*", "Correctional Home", x, perl=TRUE)
+        x <- gsub("\\.", " ", x, perl=TRUE)
+        x <- gsub("\\s+", " ", x, perl=TRUE)
+        x <- gsub("\\s*,\\s*", "-", x, perl=TRUE)
+        x <- gsub("-$", "", x, perl=TRUE)
+        x <- gsub("\\s*\\(.*\\)", "", x, perl=TRUE)
+        x <- tools::toTitleCase(tolower(x)) # TODO Doesn't do it for single-letter words!
+        x <- sub("c h ", "C H ", x, perl=TRUE)
+        x <- sub("l n j p n-", "L N J P N-", x, perl=TRUE)
+        x <- sub("j ", "J ", x, perl=TRUE)
+        x <- sub("r ", "R ", x, perl=TRUE)
+        x <- sub("m ", "M ", x, perl=TRUE)
+        return(factor(x))
+    }
+    factorCols <- c('State', 'District', 'JailType', 'JailName')
+    d[, (factorCols) := lapply(.SD, cleanForFactor), .SDcols=factorCols]
+
+    cleanForBool <- function(x) {
+        # TODO Consider specific processing for each column
+        key <- trimws(tolower(x))
+        x[key %in% c('yes','not functioning presently','4.0')] <- TRUE
+        x[key %in% c(NA,'-','no','no response',
+                     'not responded','not provided')] <- FALSE
+        return(as.logical(x))
+    }
+    boolCols <- c('WithClinic')
+    d[, (boolCols) := lapply(.SD, cleanForBool), .SDcols=boolCols]
+
+    cleanForInt <- function(x) {
+        # TODO Consider specific processing for each column
+        key <- trimws(tolower(x))
+        x[key %in% c('pa on rotation')] <- 1
+        x[key %in% c('na','n.a','not applicable',
+                     'not responded','no response',
+                     'not provided')] <- NA
+        
+        return(as.integer(x))
+    }
+    intCols <- colnames(d)[!colnames(d) %in% c(dateCols, factorCols, boolCols)]
+    d[, (intCols) := lapply(.SD, cleanForInt), .SDcols=intCols]
+
+    return(d)
+}
+
+
+read.Nalsa2011.District.xlsx <- function(fname) {
+    nalsaColNames <- c('State', 'District', 
+                       'VisitsLawyers', 'TrainingsLawyers',
+                       'DaysOfClinicByVolunteers', 
+                       'TrainingsForPrisonerVolunteers', 'TrainingsForCommunityVolunteers',
+                       'IsOkaySignboard')
+    
+    d <- data.table(read_excel(fname, 2, skip = 2, col_names = nalsaColNames))
+    
+    cleanForFactor <- function(x) {
+        x <- tools::toTitleCase(tolower(x))
+        return(factor(x))
+    }
+    factorCols <- c('State', 'District')
+    d[, (factorCols) := lapply(.SD, cleanForFactor), .SDcols=factorCols]
+    
+    cleanForBool <- function(x) {
+        # TODO Consider specific processing for each column
+        key <- trimws(tolower(x))
+        x[key %in% c('yes')] <- TRUE
+        x[key %in% c(NA,'-','no','no response',
+                     'not responded','not provided')] <- FALSE
+        return(as.logical(x))
+    }
+    boolCols <- c('IsOkaySignboard')
+    d[, (boolCols) := lapply(.SD, cleanForBool), .SDcols=boolCols]
+    
+    cleanForInt <- function(x) {
+        # TODO Consider specific processing for each column
+        key <- trimws(tolower(x))
+        x[key %in% c('none','number of traning not organised')] <- 0
+        x[key %in% c('90 days in female ward and 75 in male ward i.e. 165 days')] <- 165
+        x[key %in% c('na','n.a','not applicable',
+                     'to check attachment',
+                     'not responded','no response',
+                     'not provided')] <- NA
+
+        # Remove numbering: 1. 2. 2). etc.
+        x <- trimws(gsub(" [0-9]\\)?\\.", "", paste("", x), perl=TRUE))
+
+        expr <- paste0(gsub(".*?([0-9]+)[^0-9]*", "\\1+", x, perl=TRUE), "0")
+        expr[expr=='NA0'] <- NA
+        x <- sapply(sapply(expr, parse, file="", n=NULL), eval)
+        names(x) <- NULL
+
+        return(as.integer(x))
+    }
+    intCols <- colnames(d)[!colnames(d) %in% c(factorCols, boolCols)]
+    d[, (intCols) := lapply(.SD, cleanForInt), .SDcols=intCols]
+}
+
+
 saveAsCsv <- function(fname, d) {
     write.table(d, file = fname, sep = ",", col.names = NA, qmethod = "double")
 }
 
 
-getOutputCsvName <- function(infile) {
-    base <- tools::file_path_sans_ext("../data/NALSA-2010-Responses.xlsx")
-    outfile <- paste0(base, '.Clean.csv')
+getOutputCsvName <- function(infile, extra="") {
+    base <- tools::file_path_sans_ext(infile)
+    outfile <- paste0(base, extra, '.Clean.csv')
     return(outfile)
 }
 
@@ -127,14 +264,36 @@ showBasicNumbers <- function(d) {
     print(paste0("Number of states: ", nlevels(d$State)))
 }
 
-
-main <- function() {
+nalsa2010 <- function() {
     # Read data, clean it and save cleaned data
     nalsa2010.fname <- "../data/NALSA-2010-Responses.xlsx"
     nalsa2010 <- read.Nalsa2010.xlsx(nalsa2010.fname)
     saveAsCsv(getOutputCsvName(nalsa2010.fname), nalsa2010)
-
+    
     # Print some basic info
+    print("[NALSA 2010]:")
     showBasicNumbers(nalsa2010)
+}
+
+nalsa2011 <- function() {
+    # Read data, clean it and save cleaned data
+    nalsa2011.fname <- "../data/NALSA-2011-Responses.xlsx"
+
+    nalsa2011.jail <- read.Nalsa2011.Jail.xlsx(nalsa2011.fname)
+    saveAsCsv(getOutputCsvName(nalsa2011.fname, ".Jail"), nalsa2011.jail)
+    
+    nalsa2011.district <- read.Nalsa2011.District.xlsx(nalsa2011.fname)
+    saveAsCsv(getOutputCsvName(nalsa2011.fname, ".District"), nalsa2011.district)
+    
+    # Print some basic info
+    print("[NALSA 2011 Jail-wise]:")
+    showBasicNumbers(nalsa2011.jail)
+    print("[NALSA 2011 District-wise]:")
+    showBasicNumbers(nalsa2011.district)
+}
+
+main <- function() {
+    nalsa2010()
+    nalsa2011()
 }
 
